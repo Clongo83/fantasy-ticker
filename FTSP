@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NFL Weekly PPR Fantasy Leaders Ticker</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background-color: #08090c;
+      color: #00ffcc;
+      font-family: 'Trebuchet MS', Arial, sans-serif;
+      overflow: hidden;
+    }
+    .ticker-container {
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      background: #11141d;
+      border-top: 4px solid #00ffcc;
+      border-bottom: 4px solid #00ffcc;
+    }
+    .ticker-wrapper {
+      width: 100%;
+      overflow: hidden;
+    }
+    .ticker-content {
+      display: inline-block;
+      white-space: nowrap;
+      font-size: 3.2rem;
+      font-weight: 800;
+      padding-left: 100%;
+      animation: ticker-scroll 50s linear infinite;
+    }
+    .pos-group {
+      color: #ffcc00;
+      background: #1e2330;
+      padding: 6px 20px;
+      border-radius: 8px;
+      margin-right: 15px;
+    }
+    .player-entry {
+      color: #ffffff;
+      padding: 0 20px;
+    }
+    .pts {
+      color: #00ffcc;
+    }
+    .rec-stat {
+      color: #ff9900;
+      font-size: 2.2rem;
+    }
+    .divider {
+      color: #ff0055;
+      padding: 0 25px;
+    }
+
+    @keyframes ticker-scroll {
+      0% { transform: translate3d(0, 0, 0); }
+      100% { transform: translate3d(-100%, 0, 0); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="ticker-container">
+    <div class="ticker-wrapper">
+      <div class="ticker-content" id="ticker-text">
+        Loading NFL PPR weekly fantasy leaders...
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const SEASON_YEAR = 2026;
+    const WEEK_NUM = 1;
+
+    // Position IDs used by ESPN: 1: QB, 2: RB, 3: WR, 4: TE, 5: K, 16: D/ST
+    const POSITION_MAP = {
+      1: "QB",
+      2: "RB",
+      3: "WR",
+      4: "TE",
+      5: "K",
+      16: "D/ST"
+    };
+
+    // Calculate PPR points directly from raw stat IDs
+    function calculatePprPoints(statsMap) {
+      if (!statsMap) return { total: 0, rec: 0 };
+
+      const rec = statsMap[53] || 0; // Stat ID 53 = Receptions
+      
+      // Standard PPR Scoring Weights
+      let pts = 0;
+      pts += (statsMap[0] || 0) * 0.04;  // Passing Yds (1 pt per 25 yds)
+      pts += (statsMap[4] || 0) * 4;     // Passing TD
+      pts += (statsMap[20] || 0) * -2;   // Interceptions
+      pts += (statsMap[24] || 0) * 0.1;   // Rushing Yds (1 pt per 10 yds)
+      pts += (statsMap[25] || 0) * 6;     // Rushing TD
+      pts += (statsMap[42] || 0) * 0.1;   // Receiving Yds (1 pt per 10 yds)
+      pts += (statsMap[43] || 0) * 6;     // Receiving TD
+      pts += rec * 1.0;                  // 1.0 PPR Point per Reception
+      pts += (statsMap[72] || 0) * -2;   // Fumbles Lost
+      pts += (statsMap[11] || 0) * 2;    // 2-pt Conversions
+
+      return { total: Math.max(0, pts), rec: rec };
+    }
+
+    async function fetchNflPprLeaders() {
+      try {
+        const url = `https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/${SEASON_YEAR}/players?scoringPeriodId=${WEEK_NUM}&view=players_wl`;
+        
+        const filterHeader = {
+          "filterActive": { "value": true }
+        };
+
+        const response = await fetch(url, {
+          headers: {
+            "x-fantasy-filter": JSON.stringify(filterHeader)
+          }
+        });
+
+        const playersData = await response.json();
+        const leadersByPos = { "QB": [], "RB": [], "WR": [], "TE": [], "K": [], "D/ST": [] };
+
+        playersData.forEach(p => {
+          const posId = p.defaultPositionId;
+          const posName = POSITION_MAP[posId];
+
+          if (posName && p.stats) {
+            // Stat source ID 0 corresponds to actual played stats
+            const weekStat = p.stats.find(s => s.scoringPeriodId === WEEK_NUM && s.statSourceId === 0);
+
+            if (weekStat) {
+              let pprScore = 0;
+              let receptions = 0;
+
+              // If ESPN provides explicit stats breakdown, calculate PPR
+              if (weekStat.stats) {
+                const res = calculatePprPoints(weekStat.stats);
+                pprScore = res.total;
+                receptions = res.rec;
+              } else {
+                pprScore = weekStat.appliedTotal || 0;
+              }
+
+              if (pprScore > 0) {
+                leadersByPos[posName].push({
+                  name: p.fullName,
+                  pts: pprScore,
+                  rec: receptions
+                });
+              }
+            }
+          }
+        });
+
+        let tickerHtml = "";
+        Object.keys(leadersByPos).forEach(pos => {
+          // Sort descending by PPR fantasy points
+          leadersByPos[pos].sort((a, b) => b.pts - a.pts);
+          
+          const topPlayers = leadersByPos[pos].slice(0, 10);
+
+          if (topPlayers.length > 0) {
+            tickerHtml += `<span class="pos-group">${pos} TOP SCORERS (PPR)</span>`;
+            topPlayers.forEach((player, idx) => {
+              const recString = player.rec > 0 ? ` <span class="rec-stat">(${player.rec} REC)</span>` : '';
+              tickerHtml += `<span class="player-entry">#${idx + 1} ${player.name}: <span class="pts">${player.pts.toFixed(1)} PTS</span>${recString}</span>`;
+            });
+            tickerHtml += `<span class="divider">◆</span>`;
+          }
+        });
+
+        document.getElementById("ticker-text").innerHTML = tickerHtml || "No weekly PPR stats available yet.";
+      } catch (err) {
+        console.error("Error fetching ESPN PPR leaders:", err);
+        document.getElementById("ticker-text").innerText = "Unable to load NFL PPR stats.";
+      }
+    }
+
+    fetchNflPprLeaders();
+    setInterval(fetchNflPprLeaders, 300000);
+  </script>
+</body>
+</html>
